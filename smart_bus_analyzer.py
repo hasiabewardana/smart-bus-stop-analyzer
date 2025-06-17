@@ -10,24 +10,18 @@ This solution implements a multi-stream learning system that:
 
 import numpy as np
 import pandas as pd
-from capymoa.stream import Schema
-from capymoa.instance import Instance
-from capymoa.drift.detectors import ADWIN
-from capymoa.anomaly import HalfSpaceTrees
-from capymoa.evaluation import AnomalyDetectionEvaluator
-from capymoa.regressor import AdaptiveRandomForestRegressor
-from capymoa.classifier import OnlineBagging
-from sklearn.preprocessing import StandardScaler
-from datetime import datetime, timedelta
 import warnings
+from capymoa.anomaly import HalfSpaceTrees
+from capymoa.classifier import OnlineBagging
+from capymoa.drift.detectors import ADWIN
+from capymoa.instance import RegressionInstance
+from capymoa.regressor import AdaptiveRandomForestRegressor
+from capymoa.stream import Schema
+from datetime import datetime, timedelta
+from sklearn.preprocessing import StandardScaler
+
 warnings.filterwarnings('ignore')
 
-# class CustomHalfSpaceTrees(HalfSpaceTrees):
-#     def score_instance(self, instance):
-#         prediction_array = self.moa_learner.getVotesForInstance(instance.java_instance)
-#         if len(prediction_array) > 0:
-#             return float(prediction_array[0])  # Use the first element
-#         return 0.0  # Fallback in case of empty array
 
 class SmartBusStopAnalyzer:
     """
@@ -73,8 +67,6 @@ class SmartBusStopAnalyzer:
             anomaly_threshold=anomaly_threshold
         )
 
-        # self.anomaly_detector = CustomHalfSpaceTrees(schema=self.schema, number_of_trees=50,max_depth=8,window_size=window_size,anomaly_threshold=anomaly_threshold)
-
         self.flow_predictor = AdaptiveRandomForestRegressor(
             schema=self.schema,
             ensemble_size=10,
@@ -100,7 +92,8 @@ class SmartBusStopAnalyzer:
         self.anomaly_history = []
         self.prediction_errors = []
 
-    def extract_temporal_features(self, timestamp):
+    @staticmethod
+    def extract_temporal_features(timestamp):
         """
         Extract time-based features from timestamp
         """
@@ -176,12 +169,14 @@ class SmartBusStopAnalyzer:
         return np.array(features, dtype=np.float64)
 
     """
-    Disable temporarily as the anomaly_score is not updated properly
+    # Disable temporarily as the anomaly_score is not updated properly
     def detect_anomaly(self, feature_vector):
+        instance = RegressionInstance.from_array(schema=self.schema, x=feature_vector, y_value=np.float64(0.0))
+
         # Convert feature vector to capymoa Instance
-        instance = Instance.from_array(schema=self.schema, instance=feature_vector)
-        self.anomaly_detector.train(instance)
+        #instance = Instance.from_array(schema=self.schema, instance=feature_vector, )
         anomaly_score = self.anomaly_detector.score_instance(instance)
+        self.anomaly_detector.train(instance)
         is_anomaly = anomaly_score > self.anomaly_threshold
 
         # Store anomaly information
@@ -256,17 +251,14 @@ class SmartBusStopAnalyzer:
 
         return is_anomaly, anomaly_score
 
-    # To remove
-    def get_schema_attributes(self):
-        return self.schema.get_numeric_attributes()
-
     def predict_passenger_flow(self, feature_vector):
         """
         Predict passenger flow for the next time intervals
         """
         # Convert feature vector to capymoa Instance
-        instance = Instance.from_array(schema=self.schema, instance=feature_vector)
+        instance = RegressionInstance.from_array(schema=self.schema, x=feature_vector, y_value=np.float64(0.0))
         prediction = self.flow_predictor.predict(instance)
+        self.flow_predictor.train(instance)
 
         # Generate predictions for multiple horizons
         multi_horizon_predictions = []
@@ -285,7 +277,9 @@ class SmartBusStopAnalyzer:
             future_features[2] = np.sin(2 * np.pi * future_dt.minute / 60)
             future_features[3] = np.cos(2 * np.pi * future_dt.minute / 60)
 
-            future_instance = Instance.from_array(schema=self.schema, instance=future_features)
+            # Convert feature vector to capymoa Instance
+            future_instance = RegressionInstance.from_array(schema=self.schema, x=future_features,
+                                                            y_value=np.float64(0.0))
             pred = self.flow_predictor.predict(future_instance)
             multi_horizon_predictions.append(pred)
 
@@ -298,7 +292,8 @@ class SmartBusStopAnalyzer:
         self.drift_detectors[stream_name].add_element(float(value))
         return self.drift_detectors[stream_name].detected_change()
 
-    def identify_pattern(self, feature_vector):
+    @staticmethod
+    def identify_pattern(feature_vector):
         """
         Classify the current pattern (normal, rush hour, event, etc.)
         """
@@ -344,8 +339,11 @@ class SmartBusStopAnalyzer:
         pattern = self.identify_pattern(features)
 
         # Update models with ground truth
-        total_activity = float(boarding + landing)
-        instance = Instance.from_array(schema=self.schema, instance=features)
+        # Calculate total activity (target variable)
+        total_activity = np.float64(boarding + landing)
+
+        # Convert feature vector to capymoa Instance
+        instance = RegressionInstance.from_array(schema=self.schema, x=features, y_value=total_activity)
         self.flow_predictor.train(instance)
 
         return {
@@ -378,17 +376,18 @@ class SmartBusStopAnalyzer:
             'prediction_mae': np.mean(self.prediction_errors) if self.prediction_errors else 0
         }
 
+
 class MultiStopNetworkAnalyzer:
     """
     Analyzes patterns across multiple bus stops to identify network-wide phenomena
     """
-    
+
     def __init__(self, stop_ids):
         self.stop_ids = stop_ids
         self.stop_analyzers = {stop_id: SmartBusStopAnalyzer() for stop_id in stop_ids}
         self.correlation_matrix = np.zeros((len(stop_ids), len(stop_ids)))
         self.network_patterns = []
-        
+
     def update_correlation(self, stop1_data, stop2_data):
         """
         Update correlation between two stops using online correlation estimation
@@ -396,26 +395,26 @@ class MultiStopNetworkAnalyzer:
         # Simplified online correlation update
         # In practice, would use more sophisticated online correlation algorithms
         pass
-    
+
     def detect_network_anomaly(self, stop_results):
         """
         Detect anomalies that affect multiple stops simultaneously
         """
-        anomaly_stops = [stop for stop, result in stop_results.items() 
-                        if result['is_anomaly']]
-        
+        anomaly_stops = [stop for stop, result in stop_results.items()
+                         if result['is_anomaly']]
+
         if len(anomaly_stops) > len(self.stop_ids) * 0.5:
             return True, "network_wide_anomaly"
         elif len(anomaly_stops) > 2:
             return True, "localized_anomaly"
         return False, "normal"
-    
+
     def process_network_instance(self, multi_stop_data, timestamp):
         """
         Process data from all stops at a given timestamp
         """
         stop_results = {}
-        
+
         for stop_id in self.stop_ids:
             if stop_id in multi_stop_data:
                 data = multi_stop_data[stop_id]
@@ -426,10 +425,10 @@ class MultiStopNetworkAnalyzer:
                     timestamp
                 )
                 stop_results[stop_id] = result
-        
+
         # Detect network-wide patterns
         network_anomaly, anomaly_type = self.detect_network_anomaly(stop_results)
-        
+
         return {
             'timestamp': timestamp,
             'stop_results': stop_results,
@@ -437,35 +436,36 @@ class MultiStopNetworkAnalyzer:
             'anomaly_type': anomaly_type
         }
 
+
 def main():
     """
     Main execution function for demonstration
     """
     print("Smart Bus Stop Analyzer - COMPX523 Assignment 3")
     print("=" * 50)
-    
+
     # Initialize analyzer for a single stop
     analyzer = SmartBusStopAnalyzer()
-    
+
     # Simulate processing some data
     # In practice, this would read from the actual CSV files
     print("\nProcessing sample data stream...")
-    
+
     sample_results = []
     for i in range(20):
         # Simulate data
-        timestamp = datetime.now() + timedelta(minutes=i*5)
+        timestamp = datetime.now() + timedelta(minutes=i * 5)
         boarding = np.random.poisson(15 if i % 10 < 5 else 25)
         landing = np.random.poisson(12 if i % 10 < 5 else 20)
         loader = np.random.poisson(3)
-        
+
         # Process instance
         result = analyzer.process_instance(boarding, landing, loader, timestamp)
         sample_results.append(result)
-        
+
         if result['is_anomaly']:
             print(f"⚠️  Anomaly detected at {timestamp}: score={result['anomaly_score']:.3f}")
-    
+
     # Get analysis summary
     summary = analyzer.get_analysis_summary()
     print("\nAnalysis Summary:")
@@ -473,9 +473,10 @@ def main():
     print(f"Anomalies detected: {summary['anomalies_detected']}")
     print(f"Anomaly rate: {summary['anomaly_rate']:.2%}")
     print(f"Average anomaly score: {summary['avg_anomaly_score']:.3f}")
-    
+
     print("\n✅ Smart Bus Stop Analyzer initialized successfully!")
     print("Ready for real-time stream processing...")
+
 
 if __name__ == "__main__":
     main()
