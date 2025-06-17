@@ -1,7 +1,7 @@
 # Smart Bus Stop Analyzer
 ## Real-time Anomaly Detection and Passenger Flow Prediction
 
-### COMPX523 - Assignment 3
+### COMPX523-25A Assignment 3 - Group 6
 Group Presentation
 
 ---
