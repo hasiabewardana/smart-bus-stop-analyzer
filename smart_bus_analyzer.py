@@ -14,6 +14,7 @@ from capymoa.stream import Schema
 from capymoa.instance import Instance
 from capymoa.drift.detectors import ADWIN
 from capymoa.anomaly import HalfSpaceTrees
+from capymoa.evaluation import AnomalyDetectionEvaluator
 from capymoa.regressor import AdaptiveRandomForestRegressor
 from capymoa.classifier import OnlineBagging
 from sklearn.preprocessing import StandardScaler
@@ -21,6 +22,12 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+# class CustomHalfSpaceTrees(HalfSpaceTrees):
+#     def score_instance(self, instance):
+#         prediction_array = self.moa_learner.getVotesForInstance(instance.java_instance)
+#         if len(prediction_array) > 0:
+#             return float(prediction_array[0])  # Use the first element
+#         return 0.0  # Fallback in case of empty array
 
 class SmartBusStopAnalyzer:
     """
@@ -65,6 +72,8 @@ class SmartBusStopAnalyzer:
             window_size=window_size,
             anomaly_threshold=anomaly_threshold
         )
+
+        # self.anomaly_detector = CustomHalfSpaceTrees(schema=self.schema, number_of_trees=50,max_depth=8,window_size=window_size,anomaly_threshold=anomaly_threshold)
 
         self.flow_predictor = AdaptiveRandomForestRegressor(
             schema=self.schema,
@@ -166,12 +175,12 @@ class SmartBusStopAnalyzer:
 
         return np.array(features, dtype=np.float64)
 
+    """
+    Disable temporarily as the anomaly_score is not updated properly
     def detect_anomaly(self, feature_vector):
-        """
-        Detect anomalies in the current observation
-        """
         # Convert feature vector to capymoa Instance
         instance = Instance.from_array(schema=self.schema, instance=feature_vector)
+        self.anomaly_detector.train(instance)
         anomaly_score = self.anomaly_detector.score_instance(instance)
         is_anomaly = anomaly_score > self.anomaly_threshold
 
@@ -183,6 +192,73 @@ class SmartBusStopAnalyzer:
         })
 
         return is_anomaly, anomaly_score
+    """
+
+    def detect_anomaly(self, feature_vector):
+        """
+        Detect anomalies in the current observation using statistical approach
+        """
+        # Extract key metrics for anomaly detection
+        boarding = feature_vector[6]
+        landing = feature_vector[7]
+        loader = feature_vector[8]
+        total_activity = boarding + landing
+
+        # Add to anomaly detection window
+        if not hasattr(self, 'anomaly_window'):
+            self.anomaly_window = []
+            self.anomaly_threshold_multiplier = 2.5  # Standard deviations for anomaly
+
+        self.anomaly_window.append(total_activity)
+
+        # Keep window size limited
+        if len(self.anomaly_window) > self.window_size:
+            self.anomaly_window.pop(0)
+
+        # Calculate anomaly score
+        if len(self.anomaly_window) >= 10:  # Need minimum data
+            window_array = np.array(self.anomaly_window)
+            mean = np.mean(window_array)
+            std = np.std(window_array)
+
+            if std > 0:
+                # Z-score based anomaly detection
+                z_score = abs((total_activity - mean) / std)
+                # Convert z-score to 0-1 range using sigmoid
+                anomaly_score = 1 / (1 + np.exp(-z_score + 2))
+            else:
+                anomaly_score = 0.0
+
+            # Check for other anomalous patterns
+            # High loader activity with low passenger activity
+            if total_activity < mean * 0.3 and loader > np.mean(
+                    [f[8] for f in self.feature_buffer[-10:] if len(self.feature_buffer) >= 10]):
+                anomaly_score = max(anomaly_score, 0.7)
+
+            # Unusual boarding/landing ratio
+            if total_activity > 0:
+                ratio = boarding / total_activity
+                if ratio < 0.1 or ratio > 0.9:  # Almost all landing or all boarding
+                    anomaly_score = max(anomaly_score, 0.6)
+        else:
+            # Not enough data yet
+            anomaly_score = 0.0
+
+        # Determine if it's an anomaly
+        is_anomaly = anomaly_score > self.anomaly_threshold
+
+        # Store anomaly information
+        self.anomaly_history.append({
+            'score': anomaly_score,
+            'is_anomaly': is_anomaly,
+            'features': feature_vector
+        })
+
+        return is_anomaly, anomaly_score
+
+    # To remove
+    def get_schema_attributes(self):
+        return self.schema.get_numeric_attributes()
 
     def predict_passenger_flow(self, feature_vector):
         """
