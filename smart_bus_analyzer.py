@@ -29,7 +29,7 @@ class SmartBusStopAnalyzer:
     multiple data streams simultaneously to detect anomalies and predict passenger flow.
     """
 
-    def __init__(self, window_size=100, anomaly_threshold=0.8, prediction_horizon=6):
+    def __init__(self, window_size=200, anomaly_threshold=0.8, prediction_horizon=6):
         """
         Initialize the Smart Bus Stop Analyzer
 
@@ -441,7 +441,7 @@ def main():
     """
     Main execution function for demonstration
     """
-    print("Smart Bus Stop Analyzer - COMPX523 Assignment 3")
+    print("Smart Bus Stop Analyzer - COMPX523-25A Assignment 3 - Group 6")
     print("=" * 50)
 
     # Initialize analyzer for a single stop
