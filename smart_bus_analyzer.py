@@ -14,7 +14,7 @@ import warnings
 from capymoa.anomaly import HalfSpaceTrees
 from capymoa.classifier import OnlineBagging
 from capymoa.drift.detectors import ADWIN
-from capymoa.instance import RegressionInstance
+from capymoa.instance import RegressionInstance, Instance
 from capymoa.regressor import AdaptiveRandomForestRegressor
 from capymoa.stream import Schema
 from datetime import datetime, timedelta
@@ -29,7 +29,7 @@ class SmartBusStopAnalyzer:
     multiple data streams simultaneously to detect anomalies and predict passenger flow.
     """
 
-    def __init__(self, window_size=200, anomaly_threshold=0.8, prediction_horizon=6):
+    def __init__(self, window_size=288, anomaly_threshold=0.8, prediction_horizon=6):
         """
         Initialize the Smart Bus Stop Analyzer
 
@@ -61,10 +61,21 @@ class SmartBusStopAnalyzer:
         # Initialize online learning models
         self.anomaly_detector = HalfSpaceTrees(
             schema=self.schema,
+            random_seed=1,
+            window_size=self.window_size,
             number_of_trees=50,
             max_depth=8,
-            window_size=window_size,
-            anomaly_threshold=anomaly_threshold
+            anomaly_threshold=self.anomaly_threshold,
+            size_limit=0.1
+        )
+
+        self.anomaly_detector = HalfSpaceTrees(
+            schema=self.schema,
+            window_size=200,
+            number_of_trees=40,
+            max_depth=8,
+            anomaly_threshold=0.75,  # Increase threshold
+            size_limit=0.1
         )
 
         self.flow_predictor = AdaptiveRandomForestRegressor(
@@ -168,15 +179,22 @@ class SmartBusStopAnalyzer:
 
         return np.array(features, dtype=np.float64)
 
-    """
     # Disable temporarily as the anomaly_score is not updated properly
     def detect_anomaly(self, feature_vector):
+        """
+            Detect anomalies in the current observation
+        """
+        # Convert feature vector to capymoa Instance
+        #instance = Instance.from_array(schema=self.schema, instance=feature_vector)
         instance = RegressionInstance.from_array(schema=self.schema, x=feature_vector, y_value=np.float64(0.0))
 
-        # Convert feature vector to capymoa Instance
-        #instance = Instance.from_array(schema=self.schema, instance=feature_vector, )
+        # Score the instance
         anomaly_score = self.anomaly_detector.score_instance(instance)
+
+        # Update the model
         self.anomaly_detector.train(instance)
+
+        # Check if it's an anomaly
         is_anomaly = anomaly_score > self.anomaly_threshold
 
         # Store anomaly information
@@ -187,12 +205,11 @@ class SmartBusStopAnalyzer:
         })
 
         return is_anomaly, anomaly_score
-    """
 
+    """
     def detect_anomaly(self, feature_vector):
-        """
-        Detect anomalies in the current observation using statistical approach
-        """
+        # Detect anomalies in the current observation using statistical approach
+        
         # Extract key metrics for anomaly detection
         boarding = feature_vector[6]
         landing = feature_vector[7]
@@ -250,6 +267,7 @@ class SmartBusStopAnalyzer:
         })
 
         return is_anomaly, anomaly_score
+    """
 
     def predict_passenger_flow(self, feature_vector):
         """
